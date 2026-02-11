@@ -122,233 +122,96 @@ def compute_work_order_metrics(df):
 # -----------------------------
 # OPENROUTER SUMMARY
 # -----------------------------
-def generate_summary(structured_data, question, context=None, format_preference=None):
-    """
-    Generate dynamic, context-aware business intelligence summaries.
-    
-    Args:
-        structured_data: The data to analyze
-        question: User's question
-        context: Optional dict with user_role, industry, urgency_level, previous_context
-        format_preference: 'executive', 'detailed', 'action-oriented', or 'technical'
-    """
+def generate_summary(structured_data, question):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # Build dynamic system prompt based on context
-    system_prompt = _build_system_prompt(context)
+    # Detect question intent to customize response
+    question_lower = question.lower()
     
-    # Build dynamic user prompt with adaptive sections
-    user_prompt = _build_user_prompt(
-        structured_data, 
-        question, 
-        context, 
-        format_preference
-    )
+    # Determine analysis focus based on keywords
+    focus_areas = []
+    if any(word in question_lower for word in ['risk', 'threat', 'danger', 'concern']):
+        focus_areas.append("risks")
+    if any(word in question_lower for word in ['opportunity', 'growth', 'potential', 'expand']):
+        focus_areas.append("opportunities")
+    if any(word in question_lower for word in ['metric', 'kpi', 'number', 'performance']):
+        focus_areas.append("metrics")
+    if any(word in question_lower for word in ['action', 'next step', 'should', 'recommend']):
+        focus_areas.append("actions")
+    if any(word in question_lower for word in ['compare', 'vs', 'versus', 'benchmark']):
+        focus_areas.append("comparisons")
+    
+    # Set urgency level
+    is_urgent = any(word in question_lower for word in ['urgent', 'critical', 'asap', 'immediately', 'now'])
+    
+    # Determine output style
+    is_brief = any(word in question_lower for word in ['brief', 'quick', 'summary', 'tldr', 'short'])
+    is_detailed = any(word in question_lower for word in ['detailed', 'deep', 'comprehensive', 'thorough', 'in-depth'])
+    
+    # Build dynamic prompt sections
+    emphasis = ""
+    if focus_areas:
+        emphasis = f"\n\nEMPHASIZE: {', '.join(focus_areas).upper()}"
+    
+    urgency_note = ""
+    if is_urgent:
+        urgency_note = "\n\nURGENCY: This is time-sensitive. Prioritize immediate risks and actions."
+    
+    style_guide = ""
+    if is_brief:
+        style_guide = "\n\nSTYLE: Keep response under 150 words. Bullet points only."
+    elif is_detailed:
+        style_guide = "\n\nSTYLE: Provide comprehensive analysis with supporting data and examples."
+    
+    # Build context-aware sections
+    sections = ["1. Executive Summary"]
+    
+    if not focus_areas or "risks" in focus_areas:
+        sections.append("2. Key Risks")
+    if not focus_areas or "opportunities" in focus_areas:
+        sections.append("3. Opportunities")
+    if "actions" in focus_areas:
+        sections.append("4. Recommended Actions")
+    if "metrics" in focus_areas:
+        sections.append("5. Key Metrics & Trends")
+    if "comparisons" in focus_areas:
+        sections.append("6. Comparative Analysis")
+    
+    sections.append(f"{len(sections) + 1}. Data Caveats")
     
     payload = {
         "model": "openai/gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {
+                "role": "user",
+                "content": f"""
+You are a founder-level business intelligence assistant.
+
+User Question:
+{question}
+
+Structured Data:
+{structured_data}
+
+Provide:
+{chr(10).join(sections)}
+{emphasis}{urgency_note}{style_guide}
+
+Be concise and strategic.
+"""
+            }
         ],
-        "temperature": 0.3,
-        "max_tokens": 1500  # Add token limit for cost control
+        "temperature": 0.3 if not is_urgent else 0.1  # Lower temperature for urgent queries
     }
-    
-    # Add streaming for better UX (optional)
-    if context and context.get('stream', False):
-        payload['stream'] = True
-        return _stream_response(url, headers, payload)
     
     response = requests.post(url, headers=headers, json=payload)
-    
     if response.status_code != 200:
-        return {
-            "error": True,
-            "message": f"Error generating summary: {response.status_code}",
-            "raw_response": response.text
-        }
-    
-    return _format_response(response.json(), format_preference)
-
-
-def _build_system_prompt(context):
-    """Build adaptive system prompt based on user context."""
-    base_prompt = "You are a founder-level business intelligence assistant."
-    
-    if not context:
-        return base_prompt
-    
-    role_context = {
-        'ceo': 'Focus on strategic implications and board-level insights.',
-        'cfo': 'Emphasize financial metrics, ROI, and risk management.',
-        'product': 'Highlight user impact, feature opportunities, and product-market fit.',
-        'sales': 'Focus on revenue opportunities, customer insights, and pipeline health.',
-        'ops': 'Emphasize efficiency, scalability, and operational bottlenecks.'
-    }
-    
-    urgency_context = {
-        'critical': 'This is time-sensitive. Prioritize immediate actions and risks.',
-        'high': 'Provide actionable insights with clear next steps.',
-        'normal': 'Balance strategic thinking with practical recommendations.'
-    }
-    
-    role = context.get('user_role', '').lower()
-    urgency = context.get('urgency_level', 'normal').lower()
-    industry = context.get('industry', '')
-    
-    enhanced_prompt = base_prompt
-    
-    if role in role_context:
-        enhanced_prompt += f"\n{role_context[role]}"
-    
-    if urgency in urgency_context:
-        enhanced_prompt += f"\n{urgency_context[urgency]}"
-    
-    if industry:
-        enhanced_prompt += f"\nIndustry context: {industry}. Use relevant benchmarks and terminology."
-    
-    return enhanced_prompt
-
-
-def _build_user_prompt(structured_data, question, context, format_preference):
-    """Build dynamic user prompt with adaptive sections."""
-    
-    # Determine which sections to include
-    sections = _determine_sections(question, context, format_preference)
-    
-    prompt_parts = [
-        f"**User Question:**\n{question}\n",
-        f"**Data:**\n{structured_data}\n"
-    ]
-    
-    # Add context if available
-    if context and context.get('previous_context'):
-        prompt_parts.append(
-            f"**Previous Context:**\n{context['previous_context']}\n"
-        )
-    
-    # Build dynamic analysis request
-    prompt_parts.append("**Provide:**")
-    
-    section_templates = {
-        'executive_summary': "1. Executive Summary (2-3 sentences)",
-        'key_metrics': "2. Key Metrics & Trends",
-        'risks': "3. Critical Risks & Mitigation Strategies",
-        'opportunities': "4. Opportunities & Quick Wins",
-        'recommendations': "5. Prioritized Recommendations",
-        'comparisons': "6. Benchmark Comparisons",
-        'data_quality': "7. Data Quality & Caveats",
-        'next_steps': "8. Immediate Next Steps"
-    }
-    
-    for i, section in enumerate(sections, 1):
-        if section in section_templates:
-            prompt_parts.append(f"{i}. {section_templates[section].split('. ', 1)[1]}")
-    
-    # Add format instructions
-    format_instructions = {
-        'executive': "\n\nFormat: Brief bullet points, no more than 200 words total.",
-        'detailed': "\n\nFormat: Comprehensive analysis with supporting data.",
-        'action-oriented': "\n\nFormat: Focus on concrete actions with owners and timelines.",
-        'technical': "\n\nFormat: Include methodologies, data sources, and confidence levels."
-    }
-    
-    if format_preference in format_instructions:
-        prompt_parts.append(format_instructions[format_preference])
-    else:
-        prompt_parts.append("\n\nBe concise, strategic, and data-driven.")
-    
-    return "\n".join(prompt_parts)
-
-
-def _determine_sections(question, context, format_preference):
-    """Intelligently determine which sections to include."""
-    
-    # Default sections
-    sections = ['executive_summary', 'risks', 'opportunities', 'data_quality']
-    
-    # Add sections based on question keywords
-    question_lower = question.lower()
-    
-    if any(word in question_lower for word in ['metric', 'kpi', 'performance', 'growth']):
-        sections.insert(1, 'key_metrics')
-    
-    if any(word in question_lower for word in ['action', 'next', 'should', 'recommend']):
-        sections.append('recommendations')
-        sections.append('next_steps')
-    
-    if any(word in question_lower for word in ['compare', 'benchmark', 'vs', 'versus']):
-        sections.insert(2, 'comparisons')
-    
-    # Adjust based on format preference
-    if format_preference == 'executive':
-        sections = ['executive_summary', 'recommendations']
-    elif format_preference == 'action-oriented':
-        sections = ['executive_summary', 'recommendations', 'next_steps']
-    
-    # Adjust based on urgency
-    if context and context.get('urgency_level') == 'critical':
-        sections = ['executive_summary', 'risks', 'next_steps']
-    
-    return sections
-
-
-def _format_response(api_response, format_preference):
-    """Format the API response into a structured output."""
-    content = api_response["choices"][0]["message"]["content"]
-    
-    return {
-        "success": True,
-        "summary": content,
-        "metadata": {
-            "model": api_response.get("model"),
-            "tokens_used": api_response.get("usage", {}),
-            "format": format_preference
-        }
-    }
-
-
-def _stream_response(url, headers, payload):
-    """Stream response for better UX (optional implementation)."""
-    response = requests.post(url, headers=headers, json=payload, stream=True)
-    
-    for line in response.iter_lines():
-        if line:
-            # Process streaming chunks
-            yield line.decode('utf-8')
-
-
-# Usage examples:
-"""
-# Basic usage
-summary = generate_summary(data, "What are our top risks?")
-
-# With context
-summary = generate_summary(
-    data, 
-    "Should we expand to EMEA?",
-    context={
-        'user_role': 'ceo',
-        'industry': 'SaaS',
-        'urgency_level': 'high',
-        'previous_context': 'We discussed ARR growth last week'
-    },
-    format_preference='action-oriented'
-)
-
-# Executive brief
-summary = generate_summary(
-    data,
-    "Board meeting prep",
-    context={'user_role': 'ceo'},
-    format_preference='executive'
-)
-"""
+        return "Error generating summary from OpenRouter."
+    return response.json()["choices"][0]["message"]["content"]
 
 # -----------------------------
 # ROUTES
@@ -384,3 +247,4 @@ def ask(query: Query):
             content={"error": str(e)}
 
         )
+
