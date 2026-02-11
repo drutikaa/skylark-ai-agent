@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skylark BI Agent</title>
+    <style>
+        body { font-family: Arial; background:#f4f6f8; padding:40px;}
+        #chatbox { max-width:800px; margin:auto;}
+        .message { padding:12px; margin:10px 0; border-radius:8px;}
+        .user { background:#007bff; color:white; text-align:right;}
+        .bot { background:white; border:1px solid #ddd;}
+        input { width:80%; padding:10px;}
+        button { padding:10px;}
+    </style>
+</head>
+<body>
+<div id="chatbox">
+    <h2>🚀 Skylark Drones – BI Agent</h2>
+    <div id="messages"></div>
+    <input type="text" id="question" placeholder="Ask a business question..." />
+    <button onclick="send()">Send</button>
+</div>
+
+<script>
+async function send() {
+    const input = document.getElementById("question");
+    const messages = document.getElementById("messages");
+
+    if (!input.value) return;
+
+    messages.innerHTML += `<div class="message user">${input.value}</div>`;
+
+    const response = await fetch("/ask", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({question: input.value})
+    });
+
+    const data = await response.json();
+
+    messages.innerHTML += `<div class="message bot">${data.response.replace(/\n/g,"<br>")}</div>`;
+
+    input.value = "";
+}
+</script>
+</body>
+</html>
